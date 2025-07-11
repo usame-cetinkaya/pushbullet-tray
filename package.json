@@ -1,0 +1,40 @@
+{
+  "name": "pushbullet-tray",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build": "electron-builder"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "electron": "^35.0.1",
+    "electron-builder": "^25.1.8",
+    "prettier": "^3.5.3"
+  },
+  "dependencies": {
+    "electron-prompt": "^1.7.0",
+    "electron-squirrel-startup": "^1.0.1",
+    "keytar": "^7.9.0",
+    "ws": "^8.18.1"
+  },
+  "build": {
+    "productName": "Pushbullet Tray",
+    "mac": {
+      "icon": "resources/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ]
+    },
+    "extraResources": [
+      "resources/icon.png"
+    ]
+  }
+}
