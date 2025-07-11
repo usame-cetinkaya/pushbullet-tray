@@ -32,6 +32,13 @@ app.on("ready", async () => {
 });
 
 function connectPushbulletWebSocket() {
+  try {
+    if (ws) {
+      ws.removeAllListeners();
+      ws.close();
+    }
+  } catch (error) {}
+
   ws = new WebSocket(PUSHBULLET_WS_URL + accessToken);
 
   ws.on("open", () => {
@@ -63,12 +70,13 @@ function connectPushbulletWebSocket() {
   });
 
   ws.on("close", () => {
-    // log("WebSocket closed, reconnecting in a minute...");
-    setTimeout(connectPushbulletWebSocket, 2 * NOP_INTERVAL);
+    // log("WebSocket closed, reconnecting...");
+    setTimeout(connectPushbulletWebSocket, NOP_INTERVAL);
   });
 
   ws.on("error", (error) => {
     log(`WebSocket error: ${error.message}`);
+    setTimeout(connectPushbulletWebSocket, NOP_INTERVAL);
   });
 }
 
@@ -203,8 +211,8 @@ function getNotificationKey(push) {
 
 function log(message) {
   new Notification({
-    title: message,
-    body: new Date().toLocaleTimeString(),
+    title: new Date().toLocaleTimeString(),
+    body: message,
   }).show();
 }
 
@@ -238,7 +246,7 @@ async function prepareTray() {
     interval = setInterval(() => {
       const now = new Date();
       if (now - latestNop > 2 * NOP_INTERVAL) {
-        ws.close();
+        setTimeout(connectPushbulletWebSocket, 0);
       }
     }, NOP_INTERVAL / 2);
   } else {
