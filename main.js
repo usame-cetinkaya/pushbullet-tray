@@ -16,6 +16,10 @@ let ws = null;
 let latestModified = null;
 let latestNop = null;
 
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception:", error);
+});
+
 app.on("window-all-closed", (event) => {
   event.preventDefault();
 });
@@ -32,12 +36,9 @@ app.on("ready", async () => {
 });
 
 function connectPushbulletWebSocket() {
-  try {
-    if (ws) {
-      ws.removeAllListeners();
-      ws.close();
-    }
-  } catch (error) {}
+  if (ws) {
+    ws.removeAllListeners();
+  }
 
   ws = new WebSocket(PUSHBULLET_WS_URL + accessToken);
 
