@@ -63,8 +63,8 @@ function connectPushbulletWebSocket() {
   });
 
   ws.on("close", () => {
-    // log("WebSocket closed, reconnecting in 5 seconds...");
-    setTimeout(connectPushbulletWebSocket, 5000);
+    // log("WebSocket closed, reconnecting in a minute...");
+    setTimeout(connectPushbulletWebSocket, 2 * NOP_INTERVAL);
   });
 
   ws.on("error", (error) => {
