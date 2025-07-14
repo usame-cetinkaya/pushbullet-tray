@@ -34,7 +34,8 @@
       ]
     },
     "extraResources": [
-      "resources/icon.png"
+      "resources/icon.png",
+      "resources/error.png"
     ]
   }
 }

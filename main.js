@@ -43,12 +43,16 @@ function connectPushbulletWebSocket() {
   ws = new WebSocket(PUSHBULLET_WS_URL + accessToken);
 
   ws.on("open", () => {
+    prepareTray();
+
     latestModified = null;
     // log("WebSocket open");
     getLatestPushes();
   });
 
   ws.on("message", (data) => {
+    prepareTray();
+
     const message = JSON.parse(data);
 
     switch (message.type) {
@@ -71,7 +75,7 @@ function connectPushbulletWebSocket() {
   });
 
   ws.on("close", () => {
-    // log("WebSocket closed, reconnecting...");
+    log("WebSocket closed, reconnecting...");
     setTimeout(connectPushbulletWebSocket, NOP_INTERVAL);
   });
 
@@ -211,17 +215,17 @@ function getNotificationKey(push) {
 }
 
 function log(message) {
-  new Notification({
-    title: new Date().toLocaleTimeString(),
-    body: message,
-  }).show();
+  prepareTray(message);
 }
 
-async function prepareTray() {
-  const iconPath = app.isPackaged
+async function prepareTray(error = null) {
+  const trayIconPath = app.isPackaged
     ? path.join(process.resourcesPath, "resources", "icon.png")
     : "resources/icon.png";
-  let icon = nativeImage.createFromPath(iconPath);
+  const errorIconPath = app.isPackaged
+    ? path.join(process.resourcesPath, "resources", "error.png")
+    : "resources/error.png";
+  let icon = nativeImage.createFromPath(error ? errorIconPath : trayIconPath);
   let trayIcon = icon.resize({ width: 24, height: 24 });
   trayIcon.setTemplateImage(true);
 
@@ -242,14 +246,16 @@ async function prepareTray() {
       },
     );
 
-    connectPushbulletWebSocket();
+    if (!interval) {
+      connectPushbulletWebSocket();
 
-    interval = setInterval(() => {
-      const now = new Date();
-      if (now - latestNop > 2 * NOP_INTERVAL) {
-        setTimeout(connectPushbulletWebSocket, 0);
-      }
-    }, NOP_INTERVAL / 2);
+      interval = setInterval(() => {
+        const now = new Date();
+        if (now - latestNop > 2 * NOP_INTERVAL) {
+          setTimeout(connectPushbulletWebSocket, 0);
+        }
+      }, NOP_INTERVAL / 2);
+    }
   } else {
     menuItems.push({
       label: "Set Access Token...",
@@ -277,7 +283,8 @@ async function prepareTray() {
   if (!tray) {
     tray = new Tray(trayIcon);
   }
-  tray.setToolTip("Pushbullet Tray");
+  tray.setImage(trayIcon);
+  tray.setToolTip(error ? error : "Pushbullet Tray");
   tray.setContextMenu(trayMenu);
 }
 
