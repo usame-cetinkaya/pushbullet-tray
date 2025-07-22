@@ -4,7 +4,7 @@ This is a command bar only [Pushbullet](https://www.pushbullet.com/) client for 
 
 ## Features
 
-- Displays mirrored Android notifications from Pushbullet on MacOS. 
+- Displays mirrored Android notifications from Pushbullet on MacOS.
 - Displays push notifications sent to your Pushbullet account via API.
 - Runs on system startup. That way you don't have to remember to open it every time you restart your computer.
 

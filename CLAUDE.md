@@ -48,6 +48,7 @@ This is a macOS tray application built with Electron that integrates with Pushbu
 ### State Management
 
 The application maintains several key state variables:
+
 - `activeNotifications` Map for tracking displayed notifications
 - `latestModified` timestamp for fetching incremental push updates
 - `latestNop` for monitoring WebSocket health via heartbeat messages

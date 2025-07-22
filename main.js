@@ -33,6 +33,11 @@ app.on("ready", async () => {
     openAtLogin: true,
     openAsHidden: true,
   });
+
+  // Test notification support
+  if (!Notification.isSupported()) {
+    console.log("Notifications are not supported on this system");
+  }
 });
 
 function connectPushbulletWebSocket() {
@@ -90,29 +95,43 @@ function showNotification(push) {
     push.application_name = "Pushbullet";
   }
 
-  const notification = new Notification({
-    title: `${push.application_name}${push.title ? `: ${push.title}` : ""}`,
-    body: push.body || "",
-    icon: nativeImage.createFromDataURL(`data:image/jpeg;base64,${push.icon}`),
-  });
-
-  const key = getNotificationKey(push);
-
-  if (activeNotifications.has(key)) {
+  // Check if notifications are supported
+  if (!Notification.isSupported()) {
+    log("Notifications are not supported on this system");
     return;
   }
 
-  notification.on("click", () => {
-    sendDismissalToAndroid(push);
-  });
+  try {
+    const notification = new Notification({
+      title: `${push.application_name}${push.title ? `: ${push.title}` : ""}`,
+      body: push.body || "",
+      icon: nativeImage.createFromDataURL(
+        `data:image/jpeg;base64,${push.icon}`,
+      ),
+    });
 
-  notification.on("close", () => {
-    sendDismissalToAndroid(push);
-  });
+    const key = getNotificationKey(push);
 
-  activeNotifications.set(key, notification);
+    if (activeNotifications.has(key)) {
+      return;
+    }
 
-  notification.show();
+    notification.on("click", () => {
+      sendDismissalToAndroid(push);
+    });
+
+    notification.on("close", () => {
+      sendDismissalToAndroid(push);
+    });
+
+    activeNotifications.set(key, notification);
+
+    notification.show();
+  } catch (error) {
+    log(
+      `Please enable notifications in System Preferences > Notifications > Pushbullet Tray`,
+    );
+  }
 }
 
 function dismissNotification(push) {
