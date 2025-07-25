@@ -3,18 +3,22 @@ const prompt = require("electron-prompt");
 const keytar = require("keytar");
 const WebSocket = require("ws");
 const path = require("path");
+const forge = require("node-forge");
 
 const PUSHBULLET_WS_URL = `wss://stream.pushbullet.com/websocket/`;
 const PUSHBULLET_DISMISS_URL = "https://api.pushbullet.com/v2/ephemerals";
 const PUSHBULLET_PUSHES_URL = "https://api.pushbullet.com/v2/pushes";
 const NOP_INTERVAL = 30000;
 const activeNotifications = new Map();
+let user = null;
 let accessToken = null;
 let tray = null;
 let interval = null;
 let ws = null;
 let latestModified = null;
 let latestNop = null;
+let e2eeEnabled = false;
+let e2eePassword = null;
 
 process.on("uncaughtException", (error) => {
   console.error("Uncaught Exception:", error);
@@ -47,6 +51,8 @@ function connectPushbulletWebSocket() {
 
   ws = new WebSocket(PUSHBULLET_WS_URL + accessToken);
 
+  getUser();
+
   ws.on("open", () => {
     prepareTray();
 
@@ -65,10 +71,11 @@ function connectPushbulletWebSocket() {
         latestNop = new Date();
         break;
       case "push":
-        if (message.push.type === "mirror") {
-          showNotification(message.push);
-        } else if (message.push.type === "dismissal") {
-          dismissNotification(message.push);
+        const decryptedPush = decryptPush(message.push);
+        if (decryptedPush.type === "mirror") {
+          showNotification(decryptedPush);
+        } else if (decryptedPush.type === "dismissal") {
+          dismissNotification(decryptedPush);
         }
         break;
       case "tickle":
@@ -204,10 +211,11 @@ function getLatestPushes() {
         data?.pushes
           ?.filter((push) => push?.type)
           ?.forEach((push) => {
-            if (push.dismissed) {
-              dismissNotification(push);
+            const decryptedPush = decryptPush(push);
+            if (decryptedPush.dismissed) {
+              dismissNotification(decryptedPush);
             } else {
-              showNotification(push);
+              showNotification(decryptedPush);
             }
           });
       }
@@ -237,6 +245,99 @@ function log(message) {
   prepareTray(message);
 }
 
+function getUser() {
+  fetch("https://api.pushbullet.com/v2/users/me", {
+    headers: {
+      "Access-Token": accessToken,
+    },
+  })
+    .then((response) => response.json())
+    .then((data) => {
+      user = data;
+    })
+    .catch((error) => {
+      log(`Error fetching user data`);
+    });
+}
+
+// E2EE Helper Functions
+function deriveKey(password) {
+  const pseudorandom_function = forge.md.sha256.create();
+  const salt = user.iden;
+  const iterations = 30000;
+  const derived_key_length_bytes = 32; // 256-bit
+  return forge.pkcs5.pbkdf2(
+    password,
+    salt,
+    iterations,
+    derived_key_length_bytes,
+    pseudorandom_function,
+  );
+}
+
+function decryptE2EE(ciphertext, password) {
+  try {
+    const key = deriveKey(password);
+    console.log({ key });
+    const encoded_message = atob(ciphertext);
+    console.log({ encoded_message });
+
+    const version = encoded_message.substr(0, 1);
+    const tag = encoded_message.substr(1, 16); // 128 bits
+    const initialization_vector = encoded_message.substr(17, 12); // 96 bits
+    const encrypted_message = encoded_message.substr(29);
+
+    if (version !== "1") {
+      throw "invalid version";
+    }
+
+    const decipher = forge.cipher.createDecipher("AES-GCM", key);
+    decipher.start({
+      iv: initialization_vector,
+      tag: tag,
+    });
+    decipher.update(forge.util.createBuffer(encrypted_message));
+    decipher.finish();
+
+    const message = decipher.output.toString("utf8");
+
+    return JSON.parse(message);
+  } catch (error) {
+    console.log({ error });
+    log(`E2EE decryption failed: ${error.message}`);
+    return null;
+  }
+}
+
+function decryptPush(push) {
+  if (!push.encrypted) {
+    return push;
+  }
+
+  if (!e2eeEnabled) {
+    log("E2EE is not enabled, cannot decrypt push");
+    return push;
+  }
+
+  try {
+    const decryptedData = decryptE2EE(push.ciphertext, e2eePassword);
+    if (!decryptedData) {
+      log("Failed to decrypt push message");
+      return push;
+    }
+
+    // Merge decrypted data with original push, preserving metadata
+    return {
+      ...push,
+      ...decryptedData,
+      encrypted: false, // Mark as decrypted
+    };
+  } catch (error) {
+    log(`Error decrypting push: ${error.message}`);
+    return push; // Return original push if decryption fails
+  }
+}
+
 async function prepareTray(error = null) {
   const trayIconPath = app.isPackaged
     ? path.join(process.resourcesPath, "resources", "icon.png")
@@ -250,6 +351,10 @@ async function prepareTray(error = null) {
 
   accessToken = await keytar.getPassword("Pushbullet Tray", "accessToken");
 
+  // Load E2EE settings
+  e2eePassword = await keytar.getPassword("Pushbullet Tray", "e2eePassword");
+  e2eeEnabled = !!e2eePassword;
+
   const menuItems = [];
 
   if (accessToken) {
@@ -257,6 +362,13 @@ async function prepareTray(error = null) {
       {
         label: "Clear Access Token",
         click: () => clearAccessToken(),
+      },
+      { type: "separator" },
+      {
+        label: e2eeEnabled
+          ? "✓ End-to-End Encryption Enabled"
+          : "Enable End-to-End Encryption...",
+        click: () => toggleE2EE(),
       },
       { type: "separator" },
       {
@@ -331,4 +443,42 @@ async function promptAccessToken() {
 async function clearAccessToken() {
   await keytar.deletePassword("Pushbullet Tray", "accessToken");
   await prepareTray();
+}
+
+async function promptE2EEPassword() {
+  try {
+    const password = await prompt({
+      title: "Enter E2EE Password",
+      label: "Encryption Password:",
+      inputAttrs: {
+        type: "password",
+      },
+      type: "input",
+      height: 180,
+    });
+
+    if (password !== null) {
+      await keytar.setPassword("Pushbullet Tray", "e2eePassword", password);
+      e2eePassword = password;
+      e2eeEnabled = true;
+      await prepareTray();
+    }
+  } catch (error) {
+    log(`Error prompting for E2EE password: ${error}`);
+  }
+}
+
+async function clearE2EEPassword() {
+  await keytar.deletePassword("Pushbullet Tray", "e2eePassword");
+  e2eePassword = null;
+  e2eeEnabled = false;
+  await prepareTray();
+}
+
+async function toggleE2EE() {
+  if (e2eeEnabled) {
+    await clearE2EEPassword();
+  } else {
+    await promptE2EEPassword();
+  }
 }
