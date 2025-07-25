@@ -3,13 +3,14 @@ const prompt = require("electron-prompt");
 const keytar = require("keytar");
 const WebSocket = require("ws");
 const path = require("path");
-const crypto = require("crypto");
+const forge = require("node-forge");
 
 const PUSHBULLET_WS_URL = `wss://stream.pushbullet.com/websocket/`;
 const PUSHBULLET_DISMISS_URL = "https://api.pushbullet.com/v2/ephemerals";
 const PUSHBULLET_PUSHES_URL = "https://api.pushbullet.com/v2/pushes";
 const NOP_INTERVAL = 30000;
 const activeNotifications = new Map();
+let user = null;
 let accessToken = null;
 let tray = null;
 let interval = null;
@@ -49,6 +50,8 @@ function connectPushbulletWebSocket() {
   }
 
   ws = new WebSocket(PUSHBULLET_WS_URL + accessToken);
+
+  getUser();
 
   ws.on("open", () => {
     prepareTray();
@@ -242,58 +245,97 @@ function log(message) {
   prepareTray(message);
 }
 
+function getUser() {
+  fetch("https://api.pushbullet.com/v2/users/me", {
+    headers: {
+      "Access-Token": accessToken,
+    },
+  })
+    .then((response) => response.json())
+    .then((data) => {
+      user = data;
+    })
+    .catch((error) => {
+      log(`Error fetching user data`);
+    });
+}
+
 // E2EE Helper Functions
-function deriveKey(password, salt) {
-  return crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256');
+function deriveKey(password) {
+  const pseudorandom_function = forge.md.sha256.create();
+  const salt = user.iden;
+  const iterations = 30000;
+  const derived_key_length_bytes = 32; // 256-bit
+  return forge.pkcs5.pbkdf2(
+    password,
+    salt,
+    iterations,
+    derived_key_length_bytes,
+    pseudorandom_function,
+  );
 }
 
 function decryptE2EE(ciphertext, password) {
   try {
-    // Parse the ciphertext (base64 encoded JSON)
-    const encryptedData = JSON.parse(Buffer.from(ciphertext, 'base64').toString());
-    
-    // Extract components
-    const salt = Buffer.from(encryptedData.salt, 'base64');
-    const iv = Buffer.from(encryptedData.iv, 'base64');
-    const authTag = Buffer.from(encryptedData.tag, 'base64');
-    const encrypted = Buffer.from(encryptedData.ciphertext, 'base64');
-    
-    // Derive key
-    const key = deriveKey(password, salt);
-    
-    // Create decipher
-    const decipher = crypto.createDecipherGCM('aes-256-gcm', key);
-    decipher.setIV(iv);
-    decipher.setAuthTag(authTag);
-    
-    // Decrypt
-    let decrypted = decipher.update(encrypted, null, 'utf8');
-    decrypted += decipher.final('utf8');
-    
-    return JSON.parse(decrypted);
+    const key = deriveKey(password);
+    console.log({ key });
+    const encoded_message = atob(ciphertext);
+    console.log({ encoded_message });
+
+    const version = encoded_message.substr(0, 1);
+    const tag = encoded_message.substr(1, 16); // 128 bits
+    const initialization_vector = encoded_message.substr(17, 12); // 96 bits
+    const encrypted_message = encoded_message.substr(29);
+
+    if (version !== "1") {
+      throw "invalid version";
+    }
+
+    const decipher = forge.cipher.createDecipher("AES-GCM", key);
+    decipher.start({
+      iv: initialization_vector,
+      tag: tag,
+    });
+    decipher.update(forge.util.createBuffer(encrypted_message));
+    decipher.finish();
+
+    const message = decipher.output.toString("utf8");
+
+    return JSON.parse(message);
   } catch (error) {
+    console.log({ error });
     log(`E2EE decryption failed: ${error.message}`);
     return null;
   }
 }
 
 function decryptPush(push) {
-  if (!push.encrypted || !e2eeEnabled || !e2eePassword) {
+  if (!push.encrypted) {
     return push;
   }
-  
-  const decryptedData = decryptE2EE(push.ciphertext, e2eePassword);
-  if (!decryptedData) {
-    log('Failed to decrypt push message');
+
+  if (!e2eeEnabled) {
+    log("E2EE is not enabled, cannot decrypt push");
     return push;
   }
-  
-  // Merge decrypted data with original push, preserving metadata
-  return {
-    ...push,
-    ...decryptedData,
-    encrypted: false // Mark as decrypted
-  };
+
+  try {
+    const decryptedData = decryptE2EE(push.ciphertext, e2eePassword);
+    if (!decryptedData) {
+      log("Failed to decrypt push message");
+      return push;
+    }
+
+    // Merge decrypted data with original push, preserving metadata
+    return {
+      ...push,
+      ...decryptedData,
+      encrypted: false, // Mark as decrypted
+    };
+  } catch (error) {
+    log(`Error decrypting push: ${error.message}`);
+    return push; // Return original push if decryption fails
+  }
 }
 
 async function prepareTray(error = null) {
@@ -308,7 +350,7 @@ async function prepareTray(error = null) {
   trayIcon.setTemplateImage(true);
 
   accessToken = await keytar.getPassword("Pushbullet Tray", "accessToken");
-  
+
   // Load E2EE settings
   e2eePassword = await keytar.getPassword("Pushbullet Tray", "e2eePassword");
   e2eeEnabled = !!e2eePassword;
@@ -323,7 +365,9 @@ async function prepareTray(error = null) {
       },
       { type: "separator" },
       {
-        label: e2eeEnabled ? "✓ E2EE Enabled" : "Enable E2EE...",
+        label: e2eeEnabled
+          ? "✓ End-to-End Encryption Enabled"
+          : "Enable End-to-End Encryption...",
         click: () => toggleE2EE(),
       },
       { type: "separator" },
